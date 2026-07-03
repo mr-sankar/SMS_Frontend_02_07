@@ -23,6 +23,7 @@ export function AuthProvider({ children }) {
     });
     const handleLogout = () => {
         localStorage.removeItem("driver_live_tracking");
+        localStorage.removeItem("authToken");
         logoutMutation.mutate();
     };
     return (<AuthContext.Provider value={{
