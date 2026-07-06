@@ -731,14 +731,13 @@ export default function Staff() {
                       </div>
                       <div>
                         <Label>Department *</Label>
-                        <Select value={form.department} onValueChange={(v) => setForm((f) => ({ ...f, department: v }))}>
-                          <SelectTrigger className="mt-1"><SelectValue placeholder="Select" /></SelectTrigger>
-                          <SelectContent>
-                            {DEPARTMENTS.map((d) => (
-                              <SelectItem key={d} value={d}>{d}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <Input
+                          className="mt-1"
+                          value={form.department}
+                          onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))}
+                          placeholder="e.g. Science, Mathematics"
+                          data-testid="input-department"
+                        />
                       </div>
                     </div>
 

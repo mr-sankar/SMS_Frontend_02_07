@@ -47,7 +47,6 @@ function calcGrade(marks, max) {
 
 // Pagination configuration
 const ITEMS_PER_PAGE = 7;
-let cachedSchoolName = null;
 
 export default function ExamResults() {
   const { user } = useAuth();
@@ -375,31 +374,24 @@ export default function ExamResults() {
       let schoolName = "School";
 
       try {
+        const settingsRes = await fetch("/api/school-settings", { credentials: "include" });
+        if (settingsRes.ok) {
+          const settings = await settingsRes.json();
+          schoolName = settings?.name?.trim() || schoolName;
+        }
+      } catch (e) {
+        console.warn("School settings fetch failed, using fallback name");
+      }
+
+      // Try API first (if it supports filtering)
+      try {
         const url = examId 
           ? `/api/exam-results/student/${studentId}/gpa?examId=${examId}` 
           : `/api/exam-results/student/${studentId}/gpa`;
-
-        // Parallel fetch settings and gpa data, caching settings for instant subsequent loads
-        const fetchSettings = cachedSchoolName 
-          ? Promise.resolve(null)
-          : fetch("/api/school-settings", { credentials: "include" }).catch(() => null);
-
-        const fetchGpa = fetch(url, { credentials: "include" }).catch(() => null);
-
-        const [settingsRes, gpaRes] = await Promise.all([fetchSettings, fetchGpa]);
-
-        if (settingsRes && settingsRes.ok) {
-          const settings = await settingsRes.json();
-          if (settings?.name) {
-            cachedSchoolName = settings.name.trim();
-            schoolName = cachedSchoolName;
-          }
-        } else if (cachedSchoolName) {
-          schoolName = cachedSchoolName;
-        }
-
-        if (gpaRes && gpaRes.ok) {
-          const apiData = await gpaRes.json();
+        
+        const res = await fetch(url, { credentials: "include" });
+        if (res.ok) {
+          const apiData = await res.json();
           resultsForStudent = apiData.results || [];
           reportMeta = {
             studentName: apiData.studentName || studentName,
@@ -409,7 +401,7 @@ export default function ExamResults() {
           };
         }
       } catch (e) {
-        console.warn("API fetch failed, using local data", e);
+        console.warn("API fetch failed, using local data");
       }
 
       // Fallback: Filter from scopedResults (current table data)
@@ -437,30 +429,11 @@ export default function ExamResults() {
       const studentClass = studentRecord?.classId ? classes.find(c => String(c.id) === String(studentRecord.classId)) : null;
       const examClass = selectedExam?.classId ? classes.find(c => String(c.id) === String(selectedExam.classId)) : null;
       const firstResult = resultsForStudent[0] || {};
-
-      const resolvedClassName = 
-        (studentRecord?.className && studentRecord.className !== "Unassigned") ? studentRecord.className :
-        studentClass?.name ||
-        (reportMeta.className && reportMeta.className !== "N/A" && !reportMeta.className.startsWith("Class null")) ? reportMeta.className :
-        firstResult.className ||
-        selectedExam?.className ||
-        examClass?.name ||
-        "N/A";
-
-      const resolvedAcademicYear = 
-        studentRecord?.academicYear ||
-        studentClass?.academicYear ||
-        (reportMeta.academicYear && reportMeta.academicYear !== "N/A") ? reportMeta.academicYear :
-        firstResult.academicYear ||
-        examClass?.academicYear ||
-        selectedExam?.academicYear ||
-        "N/A";
-
       reportMeta = {
         studentName: reportMeta.studentName || studentName,
         rollNumber: reportMeta.rollNumber || studentRecord?.rollNumber || "N/A",
-        className: resolvedClassName,
-        academicYear: resolvedAcademicYear,
+        className: reportMeta.className || firstResult.className || selectedExam?.className || examClass?.name || studentRecord?.className || studentClass?.name || "N/A",
+        academicYear: reportMeta.academicYear || firstResult.academicYear || examClass?.academicYear || studentClass?.academicYear || selectedExam?.academicYear || "N/A",
       };
 
       // Remove any remaining duplicates
@@ -1092,8 +1065,8 @@ export default function ExamResults() {
                             Report Card
                           </Button>
                           
-                          {/* Edit Button - only show for teachers/admin */}
-                          {(isTeacher || isAdmin) && (
+                          {/* Edit Button - only show for teachers */}
+                          {isTeacher && (
                             <Button
                               size="sm"
                               variant="outline"
