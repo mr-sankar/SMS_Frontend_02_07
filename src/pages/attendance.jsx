@@ -141,6 +141,19 @@ const formatStaffTime = (value) => {
     }
     return raw.slice(0, 5);
 };
+const isValidSchoolTime = (value) => typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+const timeToMinutes = (value, fallback = "00:00") => {
+    const source = isValidSchoolTime(value) ? value : fallback;
+    const [hours, minutes] = source.split(":").map(Number);
+    return hours * 60 + minutes;
+};
+const formatSchoolTime = (value, fallback = "00:00") => {
+    const source = isValidSchoolTime(value) ? value : fallback;
+    const [hours, minutes] = source.split(":").map(Number);
+    const date = new Date();
+    date.setHours(hours, minutes, 0, 0);
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
 const getStaffAttendanceSortTime = (record) => {
     const rawValue = record?.checkInTime ?? record?.checkOutTime ?? record?.createdAt ?? `${record?.date ?? ""}T00:00:00`;
     const parsed = new Date(rawValue);
@@ -181,11 +194,22 @@ export default function Attendance() {
     const canViewClassAttendance = CLASS_ATTENDANCE_ROLES.includes(user?.role || "");
     const [activeTab, setActiveTab] = useState(canUsePersonalAttendance ? "my-attendance" : isStaffAttendanceUser && !isAttendanceManager ? "my-staff" : "attendance");
     const [selectedClass, setSelectedClass] = useState("");
-    const [selectedDate, setSelectedDate] = useState(isAttendanceManager ? today : "");
+    const [selectedDate, setSelectedDate] = useState("");
     const [open, setOpen] = useState(false);
     const [gridMode, setGridMode] = useState(false);
     const [gridStatuses, setGridStatuses] = useState({});
     const [form, setForm] = useState({ studentId: "", classId: "", date: today, status: "present", remarks: "" });
+    useEffect(() => {
+        if (open) {
+            setForm({
+                studentId: "",
+                classId: selectedClass || "",
+                date: selectedDate || today,
+                status: "present",
+                remarks: ""
+            });
+        }
+    }, [open, selectedClass, selectedDate, today]);
     const [behaviorOpen, setBehaviorOpen] = useState(false);
     const [behaviorLogs, setBehaviorLogs] = useState([]);
     const [behaviorLoading, setBehaviorLoading] = useState(false);
@@ -213,10 +237,35 @@ export default function Attendance() {
     const [checkOutReason, setCheckOutReason] = useState("");
     const [staffActionLoading, setStaffActionLoading] = useState(false);
     const [updatedRecords, setUpdatedRecords] = useState({});
+    const [timingOpen, setTimingOpen] = useState(false);
+    const [timingForm, setTimingForm] = useState({ schoolStartTime: "10:00", schoolEndTime: "17:30" });
+    const [timingSaving, setTimingSaving] = useState(false);
+    const { data: schoolSettings, refetch: refetchSchoolSettings } = useQuery({
+        queryKey: ["school-settings"],
+        queryFn: async () => {
+            const res = await fetch("/api/school-settings", { credentials: "include" });
+            if (!res.ok)
+                throw new Error("Failed to load school timings");
+            return res.json();
+        },
+        staleTime: 30000,
+    });
     const { data: classes = [] } = useListClasses({ query: { queryKey: getListClassesQueryKey(), staleTime: 30000, enabled: canViewClassAttendance } });
     const periodwiseClasses = classes.filter(isPeriodwiseClass);
     const selectedClassInfo = selectedClass ? classes.find((c) => String(c.id) === selectedClass) ?? null : null;
     const selectedClassMode = selectedClassInfo ? getAttendanceMode(selectedClassInfo) : null;
+    const schoolStartTime = schoolSettings?.schoolStartTime ?? "10:00";
+    const schoolEndTime = schoolSettings?.schoolEndTime ?? "17:30";
+    const schoolStartLabel = formatSchoolTime(schoolStartTime, "10:00");
+    const schoolEndLabel = formatSchoolTime(schoolEndTime, "17:30");
+    useEffect(() => {
+        if (!schoolSettings)
+            return;
+        setTimingForm({
+            schoolStartTime: schoolSettings.schoolStartTime ?? "10:00",
+            schoolEndTime: schoolSettings.schoolEndTime ?? "17:30",
+        });
+    }, [schoolSettings]);
     const selectedClassLabel = selectedClassInfo?.name ?? (selectedClassInfo ? `Class ${selectedClassInfo.grade}-${selectedClassInfo.section}` : "");
     const isTeacher = user?.role === "teacher";
     // Roster lookups are only needed for attendance managers (bulk entry, name lookup).
@@ -234,12 +283,6 @@ export default function Attendance() {
         setPeriodEntryMode("view");
         setPeriodStatuses({});
         setPeriodRemarks({});
-        if (!nextClassId)
-            return;
-        const nextClassInfo = classes.find((c) => String(c.id) === nextClassId) ?? null;
-        if (nextClassInfo) {
-            setActiveTab(getAttendanceMode(nextClassInfo) === "periodwise" ? "periodwise" : "attendance");
-        }
     };
     const params = {};
     if (selectedClass)
@@ -253,17 +296,11 @@ export default function Attendance() {
     useEffect(() => {
         if (!selectedClassInfo)
             return;
-        if (activeTab !== "attendance" && activeTab !== "periodwise")
-            return;
-        const nextTab = selectedClassMode === "periodwise" ? "periodwise" : "attendance";
-        if (activeTab !== nextTab) {
-            setActiveTab(nextTab);
-        }
         setSelectedPeriod("");
         setPeriodEntryMode("view");
         setPeriodStatuses({});
         setPeriodRemarks({});
-    }, [activeTab, selectedClassInfo, selectedClassMode]);
+    }, [selectedClassInfo]);
     const dayName = selectedDate ? new Date(`${selectedDate}T00:00:00`).toLocaleDateString("en-US", { weekday: "long" }) : "";
     const timetableParams = new URLSearchParams();
     if (selectedClass)
@@ -358,8 +395,8 @@ export default function Attendance() {
         enabled: activeTab === "staff" && isAdmin,
         staleTime: 5000,
     });
-    const staffCheckinRecords = [...staffRecords]
-        .filter((record) => record.source === "staff_checkins")
+    const staffAttendanceRecords = [...staffRecords]
+        .filter((record) => record.source !== "staff_roster" || record.status !== "pending")
         .sort((a, b) => {
         const aTime = getStaffAttendanceSortTime(a);
         const bTime = getStaffAttendanceSortTime(b);
@@ -473,8 +510,9 @@ export default function Attendance() {
     const myStudent = isStudent ? allStudents.find((s) => s.userId === user?.id) : null;
     // Server already scopes attendance records by session role. No client-side filter needed.
     const scopedRecords = records;
-    const selectedMonth = (selectedDate || today).slice(0, 7);
-    const selectedDay = selectedDate || today;
+    const attendanceEntryDate = selectedDate || today;
+    const selectedMonth = attendanceEntryDate.slice(0, 7);
+    const selectedDay = attendanceEntryDate;
     const dailySummary = summarizeStudentDayAttendance(scopedRecords.filter((r) => r.date === selectedDay));
     const monthlySummary = summarizeStudentDayAttendance(monthlyRecords.filter((r) => String(r.date).startsWith(selectedMonth)));
     const periodDailySummary = summarizeStudentDayAttendance(periodDayRecords);
@@ -534,7 +572,7 @@ export default function Attendance() {
         for (const [studentIdStr, status] of Object.entries(gridStatuses)) {
             const studentId = parseInt(studentIdStr);
             const record = await markMutation.mutateAsync({
-                data: { studentId, classId: parseInt(selectedClass), date: selectedDate, status },
+                data: { studentId, classId: parseInt(selectedClass), date: attendanceEntryDate, status },
             });
             markAsUpdated(record);
         }
@@ -583,15 +621,53 @@ export default function Attendance() {
         loadBehaviorLogs({ classId: behaviorFilterClass || undefined, studentId: studentId || undefined });
     };
     const handleAttendanceTabClick = () => {
-        if (selectedClassMode === "periodwise") {
-            setSelectedClass("");
-            setSelectedPeriod("");
-            setPeriodStatuses({});
-            setPeriodRemarks({});
-        }
         setActiveTab("attendance");
     };
+    const handleSaveSchoolTimings = async () => {
+        if (!isValidSchoolTime(timingForm.schoolStartTime) || !isValidSchoolTime(timingForm.schoolEndTime)) {
+            toast({ title: "Invalid timings", description: "Use valid start and end times.", variant: "destructive" });
+            return;
+        }
+        if (timeToMinutes(timingForm.schoolStartTime) >= timeToMinutes(timingForm.schoolEndTime)) {
+            toast({ title: "Invalid timings", description: "End time must be later than start time.", variant: "destructive" });
+            return;
+        }
+        setTimingSaving(true);
+        try {
+            const res = await fetch("/api/school-settings", {
+                method: "PATCH",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    schoolStartTime: timingForm.schoolStartTime,
+                    schoolEndTime: timingForm.schoolEndTime,
+                }),
+            });
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                toast({ title: "Save failed", description: payload?.error || "Could not update school timings.", variant: "destructive" });
+                return;
+            }
+            setTimingOpen(false);
+            toast({ title: "School timings updated", description: `${formatSchoolTime(payload.schoolStartTime, "10:00")} - ${formatSchoolTime(payload.schoolEndTime, "17:30")}` });
+            refetchSchoolSettings();
+            qc.invalidateQueries({ queryKey: ["school-settings"] });
+            qc.invalidateQueries({ queryKey: ["today-checkin"] });
+            qc.invalidateQueries({ queryKey: ["staffTodayAttendance"] });
+        }
+        catch {
+            toast({ title: "Save failed", description: "Please try again.", variant: "destructive" });
+        }
+        finally {
+            setTimingSaving(false);
+        }
+    };
     const handleStaffCheckIn = async () => {
+        const isLate = new Date().getHours() * 60 + new Date().getMinutes() > timeToMinutes(schoolStartTime, "10:00");
+        if (isLate && !checkInReason.trim()) {
+            toast({ title: "Late check-in reason required", description: `Please enter a reason after ${schoolStartLabel}.`, variant: "destructive" });
+            return;
+        }
         setStaffActionLoading(true);
         try {
             const res = await fetch("/api/attendance/checkin", {
@@ -619,8 +695,9 @@ export default function Attendance() {
         }
     };
     const handleStaffCheckOut = async () => {
-        if (!checkOutReason.trim()) {
-            toast({ title: "Checkout reason required", description: "Please enter a reason for early checkout.", variant: "destructive" });
+        const isEarly = new Date().getHours() * 60 + new Date().getMinutes() < timeToMinutes(schoolEndTime, "17:30");
+        if (isEarly && !checkOutReason.trim()) {
+            toast({ title: "Early checkout reason required", description: `Please enter a reason before ${schoolEndLabel}.`, variant: "destructive" });
             return;
         }
         setStaffActionLoading(true);
@@ -684,6 +761,8 @@ export default function Attendance() {
     };
     const filteredCategories = BEHAVIOR_CATEGORIES.filter((c) => behaviorForm.type === "neutral" || c.type === behaviorForm.type || c.type === "neutral");
     const initBulkAttendance = () => {
+        if (!selectedDate)
+            setSelectedDate(today);
         const initial = {};
         classStudents.forEach(s => { initial[s.id] = existingByStudent[s.id] ?? "present"; });
         setBulkAttendance(initial);
@@ -703,17 +782,20 @@ export default function Attendance() {
             return;
         setSaving(true);
         try {
-            let createdCount = 0;
-            let updatedCount = 0;
-            for (const [studentIdStr, status] of Object.entries(bulkAttendance)) {
-                const record = await markMutation.mutateAsync({
+            const promises = Object.entries(bulkAttendance).map(([studentIdStr, status]) =>
+                markMutation.mutateAsync({
                     data: {
                         studentId: parseInt(studentIdStr),
                         classId: parseInt(selectedClass),
-                        date: selectedDate,
+                        date: attendanceEntryDate,
                         status: status,
                     }
-                });
+                })
+            );
+            const results = await Promise.all(promises);
+            let createdCount = 0;
+            let updatedCount = 0;
+            for (const record of results) {
                 if (record?.wasUpdated)
                     updatedCount += 1;
                 else
@@ -734,9 +816,7 @@ export default function Attendance() {
             return;
         setPeriodSaving(true);
         try {
-            let createdCount = 0;
-            let updatedCount = 0;
-            for (const [studentIdStr, status] of Object.entries(periodStatuses)) {
+            const promises = Object.entries(periodStatuses).map(async ([studentIdStr, status]) => {
                 const res = await fetch("/api/attendance/period", {
                     method: "POST",
                     credentials: "include",
@@ -745,9 +825,9 @@ export default function Attendance() {
                         studentId: Number(studentIdStr),
                         classId: Number(selectedClass),
                         timetableSlotId: Number(selectedPeriod),
-                        date: selectedDate,
+                        date: attendanceEntryDate,
                         status,
-                    remarks: periodRemarks[studentIdStr] || undefined,
+                        remarks: periodRemarks[studentIdStr] || undefined,
                     }),
                 });
                 if (!res.ok) {
@@ -763,7 +843,12 @@ export default function Attendance() {
                     }
                     throw new Error(message);
                 }
-                const record = await res.json();
+                return res.json();
+            });
+            const results = await Promise.all(promises);
+            let createdCount = 0;
+            let updatedCount = 0;
+            for (const record of results) {
                 if (record?.wasUpdated)
                     updatedCount += 1;
                 else
@@ -791,6 +876,7 @@ export default function Attendance() {
     const myStaffRecords = myStaffAttendance?.records ?? [];
     const isStaffCheckedIn = !!todayStaffAttendance?.checkInTime;
     const isStaffCheckedOut = !!todayStaffAttendance?.checkOutTime;
+    const isCheckoutCurrentlyEarly = new Date().getHours() * 60 + new Date().getMinutes() < timeToMinutes(schoolEndTime, "17:30");
     const personalRecords = isPersonalPeriodwise ? personalPeriodRecords : personalDailyRecords;
     const personalSelectedMonth = myDate.slice(0, 7);
     const personalDateLabel = myDate ? new Date(`${myDate}T00:00:00`).toLocaleDateString("en-US", {
@@ -845,6 +931,47 @@ export default function Attendance() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {isAdmin && (
+            <Dialog open={timingOpen} onOpenChange={setTimingOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" className="gap-2">
+                  <Clock className="w-4 h-4"/>
+                  Set School Timings
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-md">
+                <DialogHeader><DialogTitle>Set School Timings</DialogTitle></DialogHeader>
+                <div className="space-y-4 py-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <Label>Start time</Label>
+                      <Input
+                        type="time"
+                        value={timingForm.schoolStartTime}
+                        onChange={(e) => setTimingForm((current) => ({ ...current, schoolStartTime: e.target.value }))}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label>End time</Label>
+                      <Input
+                        type="time"
+                        value={timingForm.schoolEndTime}
+                        onChange={(e) => setTimingForm((current) => ({ ...current, schoolEndTime: e.target.value }))}
+                        className="mt-1"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Current working hours: <span className="font-medium text-foreground">{schoolStartLabel} - {schoolEndLabel}</span>
+                  </p>
+                  <Button className="w-full" onClick={handleSaveSchoolTimings} disabled={timingSaving}>
+                    {timingSaving ? "Saving..." : "Save School Timings"}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          )}
           {isTeacher && activeTab === "attendance" && mode === "view" && (<>
               <Button variant="outline" className="gap-2" onClick={() => setGridMode((g) => !g)}>
                 <Grid3X3 className="w-4 h-4"/>
@@ -871,20 +998,22 @@ export default function Attendance() {
                   <DialogHeader><DialogTitle>Mark Attendance</DialogTitle></DialogHeader>
                   <div className="space-y-4 py-2">
                     <div>
-                      <Label>Student *</Label>
-                      <Select value={form.studentId} onValueChange={(v) => setForm((f) => ({ ...f, studentId: v }))}>
-                        <SelectTrigger className="mt-1"><SelectValue placeholder="Select student"/></SelectTrigger>
+                      <Label>Class *</Label>
+                      <Select value={form.classId} onValueChange={(v) => setForm((f) => ({ ...f, classId: v, studentId: "" }))}>
+                        <SelectTrigger className="mt-1"><SelectValue placeholder="Select class"/></SelectTrigger>
                         <SelectContent>
-                          {allStudents.map((s) => (<SelectItem key={s.id} value={String(s.id)}>{s.name} â€” {s.className}</SelectItem>))}
+                          {classes.map((c) => (<SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>))}
                         </SelectContent>
                       </Select>
                     </div>
                     <div>
-                      <Label>Class *</Label>
-                      <Select value={form.classId} onValueChange={(v) => setForm((f) => ({ ...f, classId: v }))}>
-                        <SelectTrigger className="mt-1"><SelectValue placeholder="Select class"/></SelectTrigger>
+                      <Label>Student *</Label>
+                      <Select value={form.studentId} onValueChange={(v) => setForm((f) => ({ ...f, studentId: v }))} disabled={!form.classId}>
+                        <SelectTrigger className="mt-1"><SelectValue placeholder={form.classId ? "Select student" : "Select class first"}/></SelectTrigger>
                         <SelectContent>
-                          {classes.map((c) => (<SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>))}
+                          {allStudents
+                            .filter((s) => String(s.classId) === String(form.classId))
+                            .map((s) => (<SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>))}
                         </SelectContent>
                       </Select>
                     </div>
@@ -1230,12 +1359,13 @@ export default function Attendance() {
               <CardTitle className="text-base font-serif flex items-center gap-2">
                 <Clock className="w-4 h-4"/> Today's Check-in
               </CardTitle>
+              <p className="text-xs text-muted-foreground">Working hours {schoolStartLabel} - {schoolEndLabel}</p>
             </CardHeader>
             <CardContent className="space-y-4">
               {!isStaffCheckedIn ? (<div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
                   <div className="space-y-1">
                     <Label>Check-in note</Label>
-                    <Textarea value={checkInReason} onChange={(e) => setCheckInReason(e.target.value)} placeholder="Optional note" rows={2}/>
+                    <Textarea value={checkInReason} onChange={(e) => setCheckInReason(e.target.value)} placeholder={`Required after ${schoolStartLabel}`} rows={2}/>
                   </div>
                   <Button onClick={handleStaffCheckIn} disabled={staffActionLoading} className="gap-2">
                     <LogIn className="w-4 h-4"/>
@@ -1255,10 +1385,10 @@ export default function Attendance() {
 
               {isStaffCheckedIn && !isStaffCheckedOut && (<div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
                   <div className="space-y-1">
-                    <Label>Early checkout reason</Label>
-                    <Textarea value={checkOutReason} onChange={(e) => setCheckOutReason(e.target.value)} placeholder="Reason required" rows={2}/>
+                    <Label>{isCheckoutCurrentlyEarly ? "Early checkout reason" : "Checkout note"}</Label>
+                    <Textarea value={checkOutReason} onChange={(e) => setCheckOutReason(e.target.value)} placeholder={isCheckoutCurrentlyEarly ? "Reason required" : "Optional note"} rows={2}/>
                   </div>
-                  <Button variant="outline" onClick={handleStaffCheckOut} disabled={staffActionLoading || !checkOutReason.trim()} className="gap-2">
+                  <Button variant="outline" onClick={handleStaffCheckOut} disabled={staffActionLoading || (isCheckoutCurrentlyEarly && !checkOutReason.trim())} className="gap-2">
                     <LogOut className="w-4 h-4"/>
                     {staffActionLoading ? "Saving..." : "Check Out"}
                   </Button>
@@ -1327,7 +1457,7 @@ export default function Attendance() {
                   </SelectContent>
                 </Select>
               )}
-              <Button variant="outline" onClick={() => { setSelectedClass(""); setSelectedDate(isAttendanceManager ? today : ""); setAttendanceMode("manual"); setMode("view"); }}>Reset</Button>
+              <Button variant="outline" onClick={() => { setSelectedClass(""); setSelectedDate(""); setAttendanceMode("manual"); setMode("view"); }}>Reset</Button>
               </div>)}
 
             {selectedClass && selectedClassInfo && (<Card className={selectedClassMode === "periodwise" ? "border-blue-500/20 bg-blue-500/5 mt-3" : "border-cyan-500/20 bg-cyan-500/5 mt-3"}>
@@ -1336,18 +1466,18 @@ export default function Attendance() {
                     <p className="font-semibold">{selectedClassLabel}</p>
                     <p className="text-xs text-muted-foreground">
                       {selectedClassMode === "periodwise"
-                        ? "Classes 6+ use periodwise attendance. Daily attendance is calculated from period records."
+                        ? "Classes 6+ support both periodwise and direct daily attendance."
                         : "Classes 1-5 use direct daily attendance."}
                     </p>
                     {selectedClassMode === "periodwise" && (
                       <p className="mt-1 text-xs text-blue-400 flex items-center gap-1">
                         <Clock className="w-3.5 h-3.5" />
-                        This class automatically opens Periodwise Attendance for attendance managers.
+                        This class also supports Periodwise Attendance under the Periodwise tab.
                       </p>
                     )}
                   </div>
                   <Badge className={selectedClassMode === "periodwise" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"}>
-                    {selectedClassMode === "periodwise" ? "Periodwise" : "Daily"}
+                    {selectedClassMode === "periodwise" ? "Periodwise / Daily" : "Daily"}
                   </Badge>
                 </CardContent>
               </Card>)}
@@ -1756,10 +1886,10 @@ export default function Attendance() {
             </Select>
           </div>
           <Card className="glass-card border-t-2 border-t-purple-500/30">
-            <CardHeader><CardTitle className="text-base font-serif">Staff Attendance Records · {staffCheckinRecords.length}</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-base font-serif">Staff Attendance Records · {staffAttendanceRecords.length}</CardTitle></CardHeader>
             <CardContent>
-              {staffLoading ? (<div className="space-y-3">{Array.from({ length: 5 }).map((_, i) => (<Skeleton key={i} className="h-16 w-full"/>))}</div>) : staffCheckinRecords.length === 0 ? (<div className="text-center py-12 text-muted-foreground">No staff check-in or attendance records found for the selected filters.</div>) : (<div className="space-y-2">
-                  {staffCheckinRecords.map((record) => {
+              {staffLoading ? (<div className="space-y-3">{Array.from({ length: 5 }).map((_, i) => (<Skeleton key={i} className="h-16 w-full"/>))}</div>) : staffAttendanceRecords.length === 0 ? (<div className="text-center py-12 text-muted-foreground">No staff check-in or attendance records found for the selected filters.</div>) : (<div className="space-y-2">
+                  {staffAttendanceRecords.map((record) => {
                         const checkedIn = !!record.checkInTime;
                         const checkedOut = !!record.checkOutTime;
                         return (<div key={`${record.source ?? "staff"}-${record.id}`} className="rounded-lg border border-border/50 p-3 hover:bg-purple-500/5">

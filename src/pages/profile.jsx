@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
-import { useGetStudent, useGetStaff, useListStaff, useListVendors, useUpdateVendor, getListVendorsQueryKey, getGetCurrentUserQueryKey, getListStudentsQueryKey, getListStaffQueryKey } from "@/api-client";
+import { useGetStudent, useGetStaff, useListClasses, useListStaff, useListVendors, useUpdateVendor, getListVendorsQueryKey, getGetCurrentUserQueryKey, getListStudentsQueryKey, getListStaffQueryKey } from "@/api-client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,12 @@ export default function Profile() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [openEdit, setOpenEdit] = useState(false);
+  const [openPassword, setOpenPassword] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({
+    newPassword: "",
+    confirmPassword: "",
+  });
+  const [passwordSaving, setPasswordSaving] = useState(false);
 
   // Queries depending on role
   // Role checks - Define ALL first
@@ -40,6 +46,10 @@ export default function Profile() {
 
   const { data: staffList = [], isLoading: staffLoading } = useListStaff({
     query: { enabled: isStaff, staleTime: 30000 }
+  });
+
+  const { data: classes = [], isLoading: classesLoading } = useListClasses({
+    query: { enabled: role === "teacher", staleTime: 15000 }
   });
 
   const { data: vendorsList = [], isLoading: vendorLoading } = useListVendors({
@@ -98,6 +108,47 @@ export default function Profile() {
         bankAccount: editForm.bankAccount,
       }
     });
+  };
+  const handleSavePassword = async () => {
+    if (!passwordForm.newPassword || !passwordForm.confirmPassword) {
+      toast({ title: "All fields are required", variant: "destructive" });
+      return;
+    }
+    if (passwordForm.newPassword.length < 6) {
+      toast({ title: "New password must be at least 6 characters long", variant: "destructive" });
+      return;
+    }
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      toast({ title: "New passwords do not match", variant: "destructive" });
+      return;
+    }
+
+    setPasswordSaving(true);
+    try {
+      const res = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          newPassword: passwordForm.newPassword,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast({ title: "Password changed and email sent successfully!" });
+        setOpenPassword(false);
+        setPasswordForm({ newPassword: "", confirmPassword: "" });
+      } else {
+        toast({
+          title: "Failed to change password",
+          description: data?.error || "Please try again.",
+          variant: "destructive",
+        });
+      }
+    } catch {
+      toast({ title: "An error occurred", description: "Please try again.", variant: "destructive" });
+    } finally {
+      setPasswordSaving(false);
+    }
   };
 
   // Remove profile picture handler
@@ -253,13 +304,18 @@ const getDocumentAccessUrl = (doc) => {
   const borderAccent = roleColors[user.role] || "border-t-slate-500 text-slate-400";
 
   const hasAvatar = !!user.avatarUrl;
-  const classTeacherAssignment = activeStaff?.classTeacherAssignment ?? null;
+  const liveClassTeacherAssignments = activeStaff
+    ? classes.filter((cls) => String(cls.teacherId) === String(activeStaff.id))
+    : [];
+  const classTeacherAssignment = liveClassTeacherAssignments[0] ?? activeStaff?.classTeacherAssignment ?? null;
   const hasClassTeacherAssignment = !!classTeacherAssignment;
   const formatAssignedClass = (cls) => {
     if (!cls) return "Not assigned";
+    if (cls.name || cls.label) return cls.name || cls.label;
     const pieces = [cls.grade, cls.section].filter(Boolean);
     return pieces.length > 0 ? pieces.join("-") : cls.label || `Class ${cls.id}`;
   };
+  const classTeacherLabel = hasClassTeacherAssignment ? formatAssignedClass(classTeacherAssignment) : "Not assigned";
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-400">
@@ -365,11 +421,16 @@ const getDocumentAccessUrl = (doc) => {
               </div>
             </div>
 
-            {isVendor && matchedVendor && (
-              <Button onClick={handleOpenEdit} className="sm:self-start gap-2" variant="outline">
-                <Edit className="w-4 h-4" /> Edit Profile
+            <div className="flex flex-col sm:flex-row gap-2 sm:self-start">
+              {isVendor && matchedVendor && (
+                <Button onClick={handleOpenEdit} className="gap-2" variant="outline">
+                  <Edit className="w-4 h-4" /> Edit Profile
+                </Button>
+              )}
+              <Button onClick={() => setOpenPassword(true)} className="gap-2" variant="outline">
+                <Shield className="w-4 h-4" /> Change Password
               </Button>
-            )}
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -431,7 +492,7 @@ const getDocumentAccessUrl = (doc) => {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {staffLoading || staffProfileLoading ? (
+            {staffLoading || staffProfileLoading || (user.role === "teacher" && classesLoading) ? (
               <p className="text-muted-foreground text-sm">Loading staff file...</p>
             ) : activeStaff ? (
               <>
@@ -443,6 +504,9 @@ const getDocumentAccessUrl = (doc) => {
                   <Field label="Experience" value={`${activeStaff.yearsOfExperience || 0} Years`} />
                   <Field label="Joined Date" value={activeStaff.joinDate} />
                   <Field label="Contract/Employment Status" value={<Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20">{activeStaff.status}</Badge>} />
+                  {user.role === "teacher" && (
+                    <Field label="Class Teacher" value={hasClassTeacherAssignment ? `Class Teacher for ${classTeacherLabel}` : "Not assigned"} />
+                  )}
                   {activeStaff.performanceNotes && (
                     <div className="col-span-2 border-t border-border/40 pt-3 mt-2">
                       <Field label="Performance/Academic Notes" value={activeStaff.performanceNotes} />
@@ -455,7 +519,7 @@ const getDocumentAccessUrl = (doc) => {
                     {hasClassTeacherAssignment ? (
                       <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4">
                         <div className="flex items-center justify-between gap-3">
-                          <p className="font-semibold text-foreground">{formatAssignedClass(classTeacherAssignment)}</p>
+                          <p className="font-semibold text-foreground">Class Teacher for {classTeacherLabel}</p>
                           <BookOpen className="w-4 h-4 text-emerald-400 shrink-0" />
                         </div>
                         <p className="text-xs text-muted-foreground mt-1">
@@ -598,6 +662,40 @@ const getDocumentAccessUrl = (doc) => {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* Edit Password Dialog */}
+      <Dialog open={openPassword} onOpenChange={setOpenPassword}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Change Password</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <Label>New Password</Label>
+              <Input
+                type="password"
+                value={passwordForm.newPassword}
+                onChange={e => setPasswordForm(f => ({ ...f, newPassword: e.target.value }))}
+                className="mt-1"
+                placeholder="At least 6 characters"
+              />
+            </div>
+            <div>
+              <Label>Confirm New Password</Label>
+              <Input
+                type="password"
+                value={passwordForm.confirmPassword}
+                onChange={e => setPasswordForm(f => ({ ...f, confirmPassword: e.target.value }))}
+                className="mt-1"
+                placeholder="Confirm new password"
+              />
+            </div>
+            <Button className="w-full" disabled={passwordSaving} onClick={handleSavePassword}>
+              {passwordSaving ? "Changing password..." : "Change Password"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ==================== DOCUMENTS SECTION ==================== */}
       {/* ==================== DOCUMENTS SECTION ==================== */}

@@ -88,14 +88,22 @@ function QuickActions({ items }) {
 }
 
 // â”€â”€â”€ CheckInOutCard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const CHECK_IN_START = { h: 10, m: 0 };
-const CHECK_OUT_END = { h: 17, m: 30 };
-
 function nowMinutes() { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); }
-function toMinutes({ h, m }) { return h * 60 + m; }
+function timeToMinutes(value, fallback) {
+  const source = typeof value === "string" && /^\d{2}:\d{2}$/.test(value) ? value : fallback;
+  const [h, m] = source.split(":").map(Number);
+  return h * 60 + m;
+}
+function formatSchoolTime(value, fallback) {
+  const source = typeof value === "string" && /^\d{2}:\d{2}$/.test(value) ? value : fallback;
+  const [hour, minute] = source.split(":").map(Number);
+  const date = new Date();
+  date.setHours(hour, minute, 0, 0);
+  return format(date, "hh:mm a");
+}
 function formatTime(date) { return format(date, "hh:mm a"); }
 
-function ReasonModal({ type, onConfirm, onCancel }) {
+function ReasonModal({ type, onConfirm, onCancel, schoolStartLabel, schoolEndLabel }) {
   const [reason, setReason] = useState("");
   const isLate = type === "late";
   const title = isLate ? "Late Check-In" : "Early Check-Out";
@@ -103,8 +111,8 @@ function ReasonModal({ type, onConfirm, onCancel }) {
   const accent = isLate ? "border-t-amber-400/50 from-amber-500/10" : "border-t-rose-400/50 from-rose-500/10";
   const btnCls = isLate ? "bg-amber-500 hover:bg-amber-600 text-white" : "bg-rose-500 hover:bg-rose-600 text-white";
   const desc = isLate
-    ? "You're checking in after 10:00 AM. Please provide a reason for the late arrival."
-    : "You're checking out before 5:30 PM. Please provide a reason for the early departure.";
+    ? `You're checking in after ${schoolStartLabel}. Please provide a reason for the late arrival.`
+    : `You're checking out before ${schoolEndLabel}. Please provide a reason for the early departure.`;
 
   return (
     <AnimatePresence>
@@ -154,8 +162,21 @@ function CheckInOutCard() {
 
   const queryClient = useQueryClient();
   const [modal, setModal] = useState(null);
+  const { data: schoolSettings } = useQuery({
+    queryKey: ["school-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/school-settings", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load school timings");
+      return res.json();
+    },
+    staleTime: 30000,
+  });
 
   const queryKey = ["today-checkin"];
+  const schoolStartTime = schoolSettings?.schoolStartTime ?? "10:00";
+  const schoolEndTime = schoolSettings?.schoolEndTime ?? "17:30";
+  const schoolStartLabel = formatSchoolTime(schoolStartTime, "10:00");
+  const schoolEndLabel = formatSchoolTime(schoolEndTime, "17:30");
 
   const { 
     data: todayRecord = null, 
@@ -225,7 +246,7 @@ function CheckInOutCard() {
 
   const handleCheckIn = () => {
     const mins = nowMinutes();
-    if (mins > toMinutes(CHECK_IN_START)) {
+    if (mins > timeToMinutes(schoolStartTime, "10:00")) {
       setModal("late");
     } else {
       commitCheckIn(null);
@@ -234,7 +255,7 @@ function CheckInOutCard() {
 
   const handleCheckOut = () => {
     const mins = nowMinutes();
-    if (mins < toMinutes(CHECK_OUT_END)) {
+    if (mins < timeToMinutes(schoolEndTime, "17:30")) {
       setModal("early");
     } else {
       commitCheckOut(null);
@@ -255,6 +276,8 @@ function CheckInOutCard() {
           type={modal}
           onConfirm={modal === "late" ? commitCheckIn : commitCheckOut}
           onCancel={() => setModal(null)}
+          schoolStartLabel={schoolStartLabel}
+          schoolEndLabel={schoolEndLabel}
         />
       )}
 
@@ -270,8 +293,11 @@ function CheckInOutCard() {
                     {format(new Date(), "EEE, MMM d")}
                   </Badge>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p className="hidden">
                   Working hours <span className="font-medium">10:00 AM â€“ 5:30 PM</span>
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Working hours <span className="font-medium">{schoolStartLabel} - {schoolEndLabel}</span>
                 </p>
 
                 {(hasCheckedIn || hasCheckedOut) && (

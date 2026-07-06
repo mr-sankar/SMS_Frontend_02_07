@@ -880,7 +880,7 @@ export default function Students() {
           </div>)}
       </div>
 
-      '(/* Delete Confirmation Dialog */)'
+      
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1173,7 +1173,7 @@ export default function Students() {
             </div>
             <div className="flex gap-2 mt-5">
               <Button variant="outline" className="flex-1" onClick={() => { setEditStudent(null); setEditAdmissionDateOpen(false); setEditAcademicYearError(""); }}>Cancel</Button>
-              <Button className="flex-1" disabled={!editForm.name || !editForm.classId || updateMutation.isPending || !!editAcademicYearError} onClick={() => updateMutation.mutate({ id: editStudent.id, data: { name: editForm.name, classId: parseInt(editForm.classId), gender: editForm.gender, admissionDate: editForm.admissionDate || undefined, academicYear: editForm.academicYear || undefined, dateOfBirth: editForm.dateOfBirth || undefined, rollNumber: editForm.rollNumber || undefined, phone: editForm.phone || undefined, email: editForm.email || undefined, parentName: editForm.parentName || undefined, parentPhone: editForm.parentPhone || undefined, avatarUrl: editForm.avatarUrl || undefined } })}>
+              <Button className="flex-1" disabled={!editForm.name || !editForm.classId || !editForm.rollNumber?.trim() || updateMutation.isPending || !!editAcademicYearError} onClick={() => updateMutation.mutate({ id: editStudent.id, data: { name: editForm.name, classId: parseInt(editForm.classId), gender: editForm.gender, admissionDate: editForm.admissionDate || undefined, academicYear: editForm.academicYear || undefined, dateOfBirth: editForm.dateOfBirth || null, rollNumber: editForm.rollNumber.trim(), phone: editForm.phone || undefined, email: editForm.email || undefined, parentName: editForm.parentName || undefined, parentPhone: editForm.parentPhone || undefined, avatarUrl: editForm.avatarUrl || undefined } })}>
                 {updateMutation.isPending ? "Saving..." : "Save Changes"}
               </Button>
             </div>

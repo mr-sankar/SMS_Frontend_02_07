@@ -46,6 +46,7 @@ export default function Classes() {
   const [editing, setEditing] = useState(null);
   const [deleting, setDeleting] = useState(null);
   const [form, setForm] = useState(defaultForm);
+  const [createError, setCreateError] = useState("");
   const [search, setSearch] = useState("");
   const [filterYear, setFilterYear] = useState("");
   const [assigningClass, setAssigningClass] = useState(null);
@@ -93,7 +94,13 @@ export default function Classes() {
 
   const openCreate = () => {
     setForm({ ...defaultForm, academicYear: ACADEMIC_YEARS[0] });
+    setCreateError("");
     setCreateOpen(true);
+  };
+
+  const updateFormField = (field, value) => {
+    setForm((f) => ({ ...f, [field]: value }));
+    if (createOpen) setCreateError("");
   };
 
   const openEdit = (cls) => {
@@ -113,6 +120,7 @@ export default function Classes() {
   }, [classes, editing?.id, teachers]);
 
   const submitCreate = async () => {
+    setCreateError("");
     const payload = {
       grade: form.grade.trim(),
       section: form.section.trim(),
@@ -123,11 +131,7 @@ export default function Classes() {
 
     const parsed = CreateClassBody.safeParse(payload);
     if (!parsed.success) {
-      toast({
-        title: "Invalid class",
-        description: parsed.error.issues.map((i) => `${i.path.join(".") || "field"}: ${i.message}`).join("; "),
-        variant: "destructive",
-      });
+      setCreateError(parsed.error.issues.map((i) => `${i.path.join(".") || "field"}: ${i.message}`).join("; "));
       return;
     }
 
@@ -138,11 +142,7 @@ export default function Classes() {
       setForm(defaultForm);
       toast({ title: "Class created" });
     } catch (err) {
-      toast({
-        title: "Failed to create class",
-        description: err?.data?.message ?? err?.data?.error ?? err?.message ?? "Check all required fields and try again.",
-        variant: "destructive",
-      });
+      setCreateError(err?.data?.message ?? err?.data?.error ?? err?.message ?? "Check all required fields and try again.");
     }
   };
 
@@ -248,7 +248,7 @@ export default function Classes() {
           <Input
             className="mt-1 w-full"
             value={form.grade}
-            onChange={(e) => setForm((f) => ({ ...f, grade: e.target.value }))}
+            onChange={(e) => updateFormField("grade", e.target.value)}
             placeholder="e.g. Grade 1"
           />
         </div>
@@ -257,7 +257,7 @@ export default function Classes() {
           <Input
             className="mt-1 w-full"
             value={form.section}
-            onChange={(e) => setForm((f) => ({ ...f, section: e.target.value }))}
+            onChange={(e) => updateFormField("section", e.target.value)}
             placeholder="e.g. Section A"
           />
         </div>
@@ -268,7 +268,7 @@ export default function Classes() {
           <Label className="flex items-center gap-1.5">
             <Calendar className="w-4 h-4" /> Academic Year *
           </Label>
-          <Select value={form.academicYear} onValueChange={(v) => setForm((f) => ({ ...f, academicYear: v }))}>
+          <Select value={form.academicYear} onValueChange={(v) => updateFormField("academicYear", v)}>
             <SelectTrigger className="mt-1 w-full">
               <SelectValue />
             </SelectTrigger>
@@ -281,13 +281,13 @@ export default function Classes() {
         </div>
         <div>
           <Label>Room No.</Label>
-          <Input className="mt-1 w-full" value={form.room} onChange={(e) => setForm((f) => ({ ...f, room: e.target.value }))} placeholder="e.g. 101" />
+          <Input className="mt-1 w-full" value={form.room} onChange={(e) => updateFormField("room", e.target.value)} placeholder="e.g. 101" />
         </div>
       </div>
 
       <div>
         <Label>Class Teacher</Label>
-        <Select value={form.teacherId || "none"} onValueChange={(v) => setForm((f) => ({ ...f, teacherId: v }))}>
+        <Select value={form.teacherId || "none"} onValueChange={(v) => updateFormField("teacherId", v)}>
           <SelectTrigger className="mt-1 w-full">
             <SelectValue placeholder="Assign a teacher (optional)" />
           </SelectTrigger>
@@ -329,13 +329,18 @@ export default function Classes() {
               Add Class
             </Button>
 
-            <Dialog open={createOpen} onOpenChange={(o) => { setCreateOpen(o); if (!o) setForm(defaultForm); }}>
+            <Dialog open={createOpen} onOpenChange={(o) => { setCreateOpen(o); if (!o) { setForm(defaultForm); setCreateError(""); } }}>
               <DialogContent className="w-full max-w-md max-h-[85vh] flex flex-col">
                 <DialogHeader>
                   <DialogTitle>Add New Class</DialogTitle>
                   <DialogDescription>Only future academic years are available.</DialogDescription>
                 </DialogHeader>
                 <div className="flex-1 overflow-y-auto pr-2">{renderFormBody()}</div>
+                {createError && (
+                  <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                    {createError}
+                  </div>
+                )}
                 <DialogFooter>
                   <Button variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button>
                   <Button disabled={!form.grade || !form.section || createMutation.isPending} onClick={submitCreate}>

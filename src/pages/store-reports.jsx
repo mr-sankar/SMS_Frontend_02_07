@@ -20,7 +20,21 @@ export default function StoreReports() {
 
     const { data: purchases } = useQuery({
         queryKey: ["inventory", "reports", "purchases"],
-        queryFn: () => fetchJson("/api/inventory/reports/purchases"),
+        queryFn: async () => {
+            const [report, orders] = await Promise.all([
+                fetchJson("/api/inventory/reports/purchases"),
+                fetchJson("/api/purchase-orders"),
+            ]);
+            const orderItemsById = new Map((orders ?? []).map((order) => [Number(order.id), order.items ?? []]));
+            const orderItemsByPoNumber = new Map((orders ?? []).map((order) => [String(order.poNumber), order.items ?? []]));
+            return {
+                ...report,
+                orders: (report.orders ?? []).map((order) => ({
+                    ...order,
+                    items: orderItemsById.get(Number(order.id)) ?? orderItemsByPoNumber.get(String(order.poNumber)) ?? order.items ?? [],
+                })),
+            };
+        },
         staleTime: 10000,
     });
 
@@ -34,6 +48,18 @@ export default function StoreReports() {
 
     const lowStock = products.filter(p => p.lowStock);
     const purchaseOrders = purchases?.orders ?? [];
+    const formatItemsQty = (items) => {
+        if (!Array.isArray(items) || items.length === 0) return "-";
+        return items
+            .map((item) => {
+                const name = String(item?.name ?? "").trim();
+                const quantity = Number(item?.quantity ?? item?.qty ?? 0);
+                if (!name) return "";
+                return `${name} (${Number.isFinite(quantity) ? quantity : 0})`;
+            })
+            .filter(Boolean)
+            .join(", ") || "-";
+    };
     const purchaseTotalPages = Math.max(1, Math.ceil(purchaseOrders.length / PURCHASE_PAGE_SIZE));
     const safePurchasePage = Math.min(purchasePage, purchaseTotalPages);
     const pagedPurchaseOrders = purchaseOrders.slice(
@@ -87,9 +113,9 @@ export default function StoreReports() {
 
         // Purchase History
         csvContent += "PURCHASE HISTORY\r\n";
-        csvContent += "PO #,Vendor,Status,Date,Amount (INR)\r\n";
+        csvContent += "PO #,Vendor,Items (Qty),Status,Recieved Date,Amount (INR)\r\n";
         purchaseOrders.forEach(o => {
-            csvContent += `"${o.poNumber}","${o.vendorName}","${o.status}",${new Date(o.createdAt).toLocaleDateString()},${o.totalAmount}\r\n`;
+            csvContent += `"${o.poNumber}","${o.vendorName}","${formatItemsQty(o.items)}","${o.status}",${new Date(o.createdAt).toLocaleDateString()},${o.totalAmount}\r\n`;
         });
 
         const encodedUri = encodeURI(csvContent);
@@ -106,6 +132,16 @@ export default function StoreReports() {
         if (!summary) return;
         const doc = new jsPDF();
         let y = 20;
+        const formatPdfMoney = (value) => `Rs. ${Number(value || 0).toLocaleString("en-IN")}`;
+        const originalText = doc.text.bind(doc);
+        const sanitizePdfText = (value) => {
+            if (Array.isArray(value)) return value.map(sanitizePdfText);
+            if (typeof value !== "string") return value;
+            return value
+                .replace(/\u20B9|\u00E2\u201A\u00B9/g, "Rs. ")
+                .replace(/\u2212|\u00E2\u02C6\u2019/g, "-");
+        };
+        doc.text = (text, ...args) => originalText(sanitizePdfText(text), ...args);
 
         // Header
         doc.setFont("helvetica", "bold");
@@ -239,34 +275,58 @@ export default function StoreReports() {
         }
 
         // Purchase History
-        if (y > 230) { doc.addPage(); y = 20; }
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(13);
-        doc.text("PURCHASE HISTORY", 20, y);
-        y += 10;
+        doc.addPage("a4", "landscape");
+        y = 20;
+        const purchasePageWidth = doc.internal.pageSize.getWidth();
+        const purchaseColumns = {
+            po: 14,
+            vendor: 70,
+            items: 125,
+            status: 195,
+            date: 230,
+            amount: purchasePageWidth - 14,
+        };
+        const drawPurchaseHeader = () => {
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(13);
+            doc.setTextColor(30, 41, 59);
+            doc.text("PURCHASE HISTORY", 14, y);
+            y += 10;
 
-        doc.setFontSize(10);
-        doc.setTextColor(75, 85, 99);
-        doc.text("PO #", 25, y);
-        doc.text("Vendor", 70, y);
-        doc.text("Status", 120, y);
-        doc.text("Date", 155, y);
-        doc.text("Amount (₹)", 185, y, { align: "right" });
-        y += 5;
-        doc.line(20, y, 190, y);
-        y += 8;
+            doc.setFontSize(10);
+            doc.setTextColor(75, 85, 99);
+            doc.text("PO #", purchaseColumns.po, y);
+            doc.text("Vendor", purchaseColumns.vendor, y);
+            doc.text("Items (Qty)", purchaseColumns.items, y);
+            doc.text("Status", purchaseColumns.status, y);
+            doc.text("Recieved Date", purchaseColumns.date, y);
+            doc.text("Amount (INR)", purchaseColumns.amount, y, { align: "right" });
+            y += 5;
+            doc.line(14, y, purchaseColumns.amount, y);
+            y += 8;
+        };
 
+        drawPurchaseHeader();
         doc.setFont("helvetica", "normal");
         purchaseOrders.forEach(o => {
-            if (y > 260) { doc.addPage(); y = 20; }
-            doc.text(o.poNumber, 25, y);
-            doc.text(o.vendorName, 70, y);
-            doc.text(o.status, 120, y);
-            doc.text(new Date(o.createdAt).toLocaleDateString(), 155, y);
-            doc.text(o.totalAmount.toLocaleString("en-IN"), 185, y, { align: "right" });
-            y += 8;
+            const poLines = doc.splitTextToSize(o.poNumber || "-", 50);
+            const vendorLines = doc.splitTextToSize(o.vendorName || "-", 48);
+            const itemLines = doc.splitTextToSize(formatItemsQty(o.items), 65);
+            const rowHeight = Math.max(8, poLines.length * 5, vendorLines.length * 5, itemLines.length * 5);
+            if (y + rowHeight > 190) {
+                doc.addPage("a4", "landscape");
+                y = 20;
+                drawPurchaseHeader();
+                doc.setFont("helvetica", "normal");
+            }
+            doc.text(poLines, purchaseColumns.po, y);
+            doc.text(vendorLines, purchaseColumns.vendor, y);
+            doc.text(itemLines, purchaseColumns.items, y);
+            doc.text(o.status || "-", purchaseColumns.status, y);
+            doc.text(new Date(o.createdAt).toLocaleDateString(), purchaseColumns.date, y);
+            doc.text(formatPdfMoney(o.totalAmount), purchaseColumns.amount, y, { align: "right" });
+            y += rowHeight + 3;
         });
-
         doc.save(`inventory_full_report_${new Date().toISOString().split("T")[0]}.pdf`);
     };
 
@@ -491,8 +551,9 @@ export default function StoreReports() {
                                     <tr className="text-left text-xs text-muted-foreground border-b border-border/40">
                                         <th className="py-2 px-2">PO #</th>
                                         <th className="py-2 px-2">Vendor</th>
+                                        <th className="py-2 px-2">Items (Qty)</th>
                                         <th className="py-2 px-2">Status</th>
-                                        <th className="py-2 px-2">Date</th>
+                                        <th className="py-2 px-2">Recieved Date</th>
                                         <th className="py-2 px-2 text-right">Amount</th>
                                     </tr>
                                 </thead>
@@ -501,6 +562,7 @@ export default function StoreReports() {
                                         <tr key={o.id} className="border-b border-border/20">
                                             <td className="py-2 px-2 font-mono text-xs">{o.poNumber}</td>
                                             <td className="py-2 px-2">{o.vendorName}</td>
+                                            <td className="py-2 px-2 text-xs text-muted-foreground max-w-xs">{formatItemsQty(o.items)}</td>
                                             <td className="py-2 px-2">
                                                 <Badge className="bg-muted/40 text-foreground text-xs">{o.status}</Badge>
                                             </td>

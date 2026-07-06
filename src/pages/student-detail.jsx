@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AdminPasswordField } from "@/components/admin-password-field";
-import { ArrowLeft, Phone, Mail, MapPin, AlertTriangle, Wallet, Award, Bed, Bus, FileText, Users as UsersIcon, UploadCloud, Download, Trash2, Loader2, } from "lucide-react";
+import { ArrowLeft, Phone, Mail, MapPin, AlertTriangle, Wallet, Award, Bed, Bus, FileText, Users as UsersIcon, UploadCloud, Download, Trash2, Loader2, Pencil, Check, X } from "lucide-react";
 import { IdCard } from "@/components/id-card";
 const GRADE_COLORS = {
     "A+": "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
@@ -33,6 +33,57 @@ export default function StudentDetail() {
 
     const [isUploading, setIsUploading] = useState(false);
     const [dragActive, setDragActive] = useState(false);
+    const [editingAcademicYear, setEditingAcademicYear] = useState(false);
+    const [academicYearInput, setAcademicYearInput] = useState("");
+    const [academicYearSaving, setAcademicYearSaving] = useState(false);
+    const [academicYearEditError, setAcademicYearEditError] = useState("");
+
+    const getCurrentYear = () => new Date().getFullYear();
+    const formatAcademicYear = (yearText) => {
+        const year = Number(yearText);
+        return `${year} - ${year + 1}`;
+    };
+
+    const saveAcademicYear = async () => {
+        const raw = academicYearInput.trim();
+        if (!raw) {
+            setAcademicYearEditError("Academic year cannot be empty.");
+            return;
+        }
+        if (!/^\d{4}$/.test(raw)) {
+            setAcademicYearEditError("Enter a 4-digit year like 2026.");
+            return;
+        }
+        const startYear = Number(raw);
+        if (startYear < getCurrentYear()) {
+            setAcademicYearEditError("Past academic years are not allowed.");
+            return;
+        }
+        const formatted = formatAcademicYear(raw);
+        setAcademicYearSaving(true);
+        try {
+            const res = await fetch(`/api/students/${id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ academicYear: raw }),
+            });
+            if (res.ok) {
+                qc.invalidateQueries({ queryKey: [`/api/students/${id}`] });
+                qc.invalidateQueries({ queryKey: ["/api/students"] });
+                setEditingAcademicYear(false);
+                setAcademicYearEditError("");
+                toast({ title: "Academic year updated", description: `Set to ${formatted}` });
+            } else {
+                const err = await res.json();
+                setAcademicYearEditError(err.error ?? "Failed to update.");
+            }
+        } catch (e) {
+            setAcademicYearEditError(e.message ?? "Network error.");
+        } finally {
+            setAcademicYearSaving(false);
+        }
+    };
 
     const handleDrag = (e) => {
         e.preventDefault();
@@ -285,6 +336,64 @@ export default function StudentDetail() {
                 </p>
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <Field label="Class" value={s.className || "—"}/>
+                  <div className="space-y-0.5">
+                    <span className="text-xs text-muted-foreground">Academic Year</span>
+                    {editingAcademicYear ? (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="text"
+                            value={academicYearInput}
+                            maxLength={4}
+                            inputMode="numeric"
+                            autoFocus
+                            placeholder="2026"
+                            className="w-24 bg-background/50 border border-sky-500/40 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-sky-400"
+                            onChange={e => {
+                              const v = e.target.value.replace(/\D/g, "").slice(0, 4);
+                              setAcademicYearInput(v);
+                              setAcademicYearEditError("");
+                            }}
+                            onKeyDown={e => { if (e.key === "Enter") saveAcademicYear(); if (e.key === "Escape") { setEditingAcademicYear(false); setAcademicYearEditError(""); } }}
+                          />
+                          <button
+                            onClick={saveAcademicYear}
+                            disabled={academicYearSaving}
+                            className="p-1 rounded text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 transition-colors"
+                            title="Save"
+                          >
+                            {academicYearSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <Check className="w-3.5 h-3.5"/>}
+                          </button>
+                          <button
+                            onClick={() => { setEditingAcademicYear(false); setAcademicYearEditError(""); }}
+                            className="p-1 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                            title="Cancel"
+                          >
+                            <X className="w-3.5 h-3.5"/>
+                          </button>
+                        </div>
+                        {academicYearEditError && <p className="text-[10px] text-red-400">{academicYearEditError}</p>}
+                        <p className="text-[10px] text-muted-foreground">Enter 4-digit start year (e.g. 2026)</p>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 group">
+                        <p className="font-medium">{s.academicYear || <span className="text-amber-400 text-xs">Not set</span>}</p>
+                        {["admin", "clerk"].includes(user?.role ?? "") && (
+                          <button
+                            onClick={() => {
+                              setAcademicYearInput("");
+                              setAcademicYearEditError("");
+                              setEditingAcademicYear(true);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-muted-foreground hover:text-sky-400 transition-all"
+                            title="Edit Academic Year"
+                          >
+                            <Pencil className="w-3 h-3"/>
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                   <Field label="Roll Number" value={<span className="font-mono text-sky-400">{s.rollNumber}</span>}/>
                   <Field label="Admission Date" value={s.admissionDate || "—"}/>
                   <Field label="Status" value={s.status}/>

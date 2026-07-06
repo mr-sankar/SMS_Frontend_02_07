@@ -292,9 +292,9 @@ export default function Visitors() {
             headers: { "Content-Type": "application/json" }, 
             body: JSON.stringify({ dispatchStatus: status }) 
         }),
-        onSuccess: () => {
+        onSuccess: (_data, variables) => {
             qc.invalidateQueries({ queryKey: ["visitors", "postal"] });
-            toast({ title: "Dispatch status updated" });
+            toast({ title: variables?.status === "delivered" ? "Deliver status updated" : "Dispatch status updated" });
         },
         onError: (err) => toast({ 
             title: "Update failed", 

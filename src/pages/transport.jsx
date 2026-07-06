@@ -307,6 +307,14 @@ const sortedAssignments = [...assignments].sort((a, b) => {
   const activeRoutes = routes.filter(r => r.status === "active");
   const totalCapacity = vehicles.reduce((a, v) => a + (v.capacity ?? 0), 0);
   const assignedSeats = assignments.length;
+  const availableRouteVehicles = vehicles.filter(vehicle => {
+    const isUsedByAnotherRoute = routes.some(route =>
+      route.vehicleId != null &&
+      String(route.vehicleId) === String(vehicle.id) &&
+      String(route.id) !== String(editingRouteId)
+    );
+    return !isUsedByAnotherRoute;
+  });
   // Pickup options derived from selected route's stops
   const selectedRoute = routes.find(r => String(r.id) === assignForm.routeId);
   const pickupOptions = (selectedRoute?.stops ?? "").split(",").map(s => s.trim()).filter(Boolean);
@@ -616,7 +624,7 @@ const sortedAssignments = [...assignments].sort((a, b) => {
     </div>)}
 
     {/* Tab toolbars */}
-   {isAdmin && tab === "routes" && (
+    {isManager && tab === "routes" && (
   <Dialog open={openRoute} onOpenChange={(value) => {
     setOpenRoute(value);
     if (!value) resetRouteForm();
@@ -643,7 +651,15 @@ const sortedAssignments = [...assignments].sort((a, b) => {
             <Label>Assign Vehicle</Label>
             <Select value={routeForm.vehicleId} onValueChange={v => setRouteForm(f => ({ ...f, vehicleId: v }))}>
               <SelectTrigger><SelectValue placeholder="Select vehicle" /></SelectTrigger>
-              <SelectContent><SelectItem value="none">Unassigned</SelectItem>{vehicles.map(v => <SelectItem key={v.id} value={String(v.id)}>{v.vehicleNumber} — {v.model ?? ""}</SelectItem>)}</SelectContent>
+              <SelectContent>
+                <SelectItem value="none">Unassigned</SelectItem>
+                {availableRouteVehicles.map(v => (
+                  <SelectItem key={v.id} value={String(v.id)}>{v.vehicleNumber} — {v.model ?? ""}</SelectItem>
+                ))}
+                {availableRouteVehicles.length === 0 && (
+                  <div className="px-2 py-1.5 text-sm text-muted-foreground">No available vehicles</div>
+                )}
+              </SelectContent>
             </Select>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -678,7 +694,7 @@ const sortedAssignments = [...assignments].sort((a, b) => {
       </DialogContent>
     </Dialog>)}
 
-    {isAdmin && tab === "vehicles" && (
+    {isManager && tab === "vehicles" && (
   <Dialog open={openVehicle} onOpenChange={(value) => {
     setOpenVehicle(value);
     if (!value) resetVehicleForm();
@@ -754,7 +770,7 @@ const sortedAssignments = [...assignments].sort((a, b) => {
       </DialogContent>
     </Dialog>)}
 
-{isAdmin && tab === "drivers" && (
+{isManager && tab === "drivers" && (
   <Dialog open={openDriver} onOpenChange={(value) => {
     setOpenDriver(value);
     if (!value) resetDriverForm();
@@ -916,7 +932,7 @@ const sortedAssignments = [...assignments].sort((a, b) => {
   </Dialog>
 )}
 
-    {isAdmin && tab === "assignments" && (<Dialog open={openAssign} onOpenChange={setOpenAssign}>
+    {isManager && tab === "assignments" && (<Dialog open={openAssign} onOpenChange={setOpenAssign}>
       <DialogTrigger asChild>
         <Button className="gap-2 bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20">
           <Plus className="w-4 h-4" />Assign Student
@@ -1384,7 +1400,7 @@ const sortedAssignments = [...assignments].sort((a, b) => {
                                 }}>
                                   <Edit3 className="w-3.5 h-3.5" /> Edit
                                 </Button>
-                                {isAdmin && (
+                                {isManager && (
                                   <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-400 hover:bg-red-500/10 ml-1" onClick={() => removeAssignmentMutation.mutate(a.id)}>
                                     <Trash2 className="w-3.5 h-3.5" />
                                   </Button>

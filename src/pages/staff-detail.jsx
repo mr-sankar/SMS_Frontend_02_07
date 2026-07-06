@@ -261,6 +261,9 @@ export default function StaffDetail() {
     const assignedClasses = isTeacher
         ? classes.filter((c) => c.teacherId === s.id)
         : [];
+    const classTeacherLabel = assignedClasses.length > 0
+        ? assignedClasses.map((c) => c.name ?? [c.grade, c.section].filter(Boolean).join("-") ?? `Class ${c.id}`).join(", ")
+        : "Not assigned";
     const approvedLeaves = leaves.filter((l) => l.status === "approved").length;
     const pendingLeaves = leaves.filter((l) => l.status === "pending").length;
     return (<div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-400">
@@ -349,6 +352,7 @@ export default function StaffDetail() {
                       <Calendar className="w-3.5 h-3.5 text-emerald-400"/>{s.joinDate}
                     </span>}/>)}
                 {s.yearsOfExperience != null && (<Field label="Years of Experience" value={`${s.yearsOfExperience} yrs`}/>)}
+                {isTeacher && (<Field label="Class Teacher" value={assignedClasses.length > 0 ? `Class Teacher for ${classTeacherLabel}` : "Not assigned"}/>)}
                 {monthlySalary > 0 && (<Field label="Monthly Salary" value={<span className="flex items-center gap-1 font-bold text-purple-400">
                       <IndianRupee className="w-3.5 h-3.5"/>
                       {monthlySalary.toLocaleString("en-IN")}

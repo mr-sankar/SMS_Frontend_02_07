@@ -34,8 +34,20 @@ const defaultForm = {
   maxMarks: "100",
 };
 
+function calcGrade(marks, max) {
+  const pct = (Number(marks) / Number(max || 100)) * 100;
+  if (pct >= 90) return "A+";
+  if (pct >= 80) return "A";
+  if (pct >= 70) return "B+";
+  if (pct >= 60) return "B";
+  if (pct >= 50) return "C";
+  if (pct >= 40) return "D";
+  return "F";
+}
+
 // Pagination configuration
 const ITEMS_PER_PAGE = 7;
+let cachedSchoolName = null;
 
 export default function ExamResults() {
   const { user } = useAuth();
@@ -153,7 +165,22 @@ export default function ExamResults() {
 
   const updateMutation = useUpdateExamResult({
     mutation: {
-      onSuccess: () => {
+      onSuccess: (updatedResult) => {
+        qc.setQueriesData({ queryKey: getListExamResultsQueryKey() }, (oldResults) => {
+          if (!Array.isArray(oldResults)) return oldResults;
+          return oldResults.map((result) => {
+            if (Number(result.id) !== Number(updatedResult.id)) return result;
+            const marksObtained = Number(updatedResult.marksObtained);
+            const maxMarks = Number(updatedResult.maxMarks ?? result.maxMarks);
+            return {
+              ...result,
+              ...updatedResult,
+              marksObtained,
+              maxMarks,
+              grade: updatedResult.grade || calcGrade(marksObtained, maxMarks),
+            };
+          });
+        });
         qc.invalidateQueries({ queryKey: getListExamResultsQueryKey() });
         toast({ title: "Success", description: "Result updated successfully!" });
         setEditDialogOpen(false);
@@ -348,24 +375,31 @@ export default function ExamResults() {
       let schoolName = "School";
 
       try {
-        const settingsRes = await fetch("/api/school-settings", { credentials: "include" });
-        if (settingsRes.ok) {
-          const settings = await settingsRes.json();
-          schoolName = settings?.name?.trim() || schoolName;
-        }
-      } catch (e) {
-        console.warn("School settings fetch failed, using fallback name");
-      }
-
-      // Try API first (if it supports filtering)
-      try {
         const url = examId 
           ? `/api/exam-results/student/${studentId}/gpa?examId=${examId}` 
           : `/api/exam-results/student/${studentId}/gpa`;
-        
-        const res = await fetch(url, { credentials: "include" });
-        if (res.ok) {
-          const apiData = await res.json();
+
+        // Parallel fetch settings and gpa data, caching settings for instant subsequent loads
+        const fetchSettings = cachedSchoolName 
+          ? Promise.resolve(null)
+          : fetch("/api/school-settings", { credentials: "include" }).catch(() => null);
+
+        const fetchGpa = fetch(url, { credentials: "include" }).catch(() => null);
+
+        const [settingsRes, gpaRes] = await Promise.all([fetchSettings, fetchGpa]);
+
+        if (settingsRes && settingsRes.ok) {
+          const settings = await settingsRes.json();
+          if (settings?.name) {
+            cachedSchoolName = settings.name.trim();
+            schoolName = cachedSchoolName;
+          }
+        } else if (cachedSchoolName) {
+          schoolName = cachedSchoolName;
+        }
+
+        if (gpaRes && gpaRes.ok) {
+          const apiData = await gpaRes.json();
           resultsForStudent = apiData.results || [];
           reportMeta = {
             studentName: apiData.studentName || studentName,
@@ -375,7 +409,7 @@ export default function ExamResults() {
           };
         }
       } catch (e) {
-        console.warn("API fetch failed, using local data");
+        console.warn("API fetch failed, using local data", e);
       }
 
       // Fallback: Filter from scopedResults (current table data)
@@ -403,11 +437,30 @@ export default function ExamResults() {
       const studentClass = studentRecord?.classId ? classes.find(c => String(c.id) === String(studentRecord.classId)) : null;
       const examClass = selectedExam?.classId ? classes.find(c => String(c.id) === String(selectedExam.classId)) : null;
       const firstResult = resultsForStudent[0] || {};
+
+      const resolvedClassName = 
+        (studentRecord?.className && studentRecord.className !== "Unassigned") ? studentRecord.className :
+        studentClass?.name ||
+        (reportMeta.className && reportMeta.className !== "N/A" && !reportMeta.className.startsWith("Class null")) ? reportMeta.className :
+        firstResult.className ||
+        selectedExam?.className ||
+        examClass?.name ||
+        "N/A";
+
+      const resolvedAcademicYear = 
+        studentRecord?.academicYear ||
+        studentClass?.academicYear ||
+        (reportMeta.academicYear && reportMeta.academicYear !== "N/A") ? reportMeta.academicYear :
+        firstResult.academicYear ||
+        examClass?.academicYear ||
+        selectedExam?.academicYear ||
+        "N/A";
+
       reportMeta = {
         studentName: reportMeta.studentName || studentName,
         rollNumber: reportMeta.rollNumber || studentRecord?.rollNumber || "N/A",
-        className: reportMeta.className || firstResult.className || selectedExam?.className || examClass?.name || studentRecord?.className || studentClass?.name || "N/A",
-        academicYear: reportMeta.academicYear || firstResult.academicYear || examClass?.academicYear || studentClass?.academicYear || selectedExam?.academicYear || "N/A",
+        className: resolvedClassName,
+        academicYear: resolvedAcademicYear,
       };
 
       // Remove any remaining duplicates

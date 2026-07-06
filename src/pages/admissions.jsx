@@ -145,6 +145,17 @@ const readFilesAsDocs = (files, replacementFor) => Promise.all(
     reader.readAsDataURL(file);
   }))
 );
+const getCurrentAcademicYear = () => {
+  const year = new Date().getFullYear();
+  return `${year} - ${year + 1}`;
+};
+const getCurrentYear = () => new Date().getFullYear();
+const formatAcademicYear = (yearText) => {
+  const year = Number(yearText);
+  return `${year} - ${year + 1}`;
+};
+const isValidAcademicYearDisplay = (value) => /^\d{4}\s-\s\d{4}$/.test(String(value ?? "").trim());
+
 const defaultForm = {
   applicantName: "",
   dateOfBirth: "",
@@ -155,6 +166,7 @@ const defaultForm = {
   parentEmail: "",
   parentPhone: "",
   address: "",
+  academicYear: getCurrentAcademicYear(),
   documents: "",
 };
 const defaultInquiryForm = {
@@ -197,6 +209,42 @@ export default function Admissions() {
   const [selectedClassId, setSelectedClassId] = useState("");
   const [testDrafts, setTestDrafts] = useState({});
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [academicYearError, setAcademicYearError] = useState("");
+
+  const handleAcademicYearChange = (value) => {
+    const raw = value.trim();
+    if (!raw) {
+      setForm(f => ({ ...f, academicYear: "" }));
+      setAcademicYearError("");
+      return;
+    }
+
+    if (!/^\d*$/.test(raw)) {
+      setAcademicYearError("Academic year must contain digits only.");
+      return;
+    }
+
+    if (raw.length > 4) {
+      setAcademicYearError("Academic year must be exactly 4 digits.");
+      return;
+    }
+
+    if (raw.length < 4) {
+      setForm(f => ({ ...f, academicYear: raw }));
+      setAcademicYearError("Academic year must be exactly 4 digits.");
+      return;
+    }
+
+    const startYear = Number(raw);
+    if (startYear < getCurrentYear()) {
+      setAcademicYearError("Past academic years are not allowed. Please enter the current year or a future year.");
+      return;
+    }
+
+    setForm(f => ({ ...f, academicYear: formatAcademicYear(raw) }));
+    setAcademicYearError("");
+  };
+
   const PAGE_SIZE = 5;
   const [applicationPage, setApplicationPage] = useState(1);
   const [purchasePage, setPurchasePage] = useState(1);
@@ -307,6 +355,7 @@ export default function Admissions() {
         qc.invalidateQueries({ queryKey: getListAdmissionsQueryKey() });
         setOpen(false);
         setForm(defaultForm);
+        setAcademicYearError("");
         localStorage.removeItem("admission_form_draft");
         toast({ title: "Application submitted successfully" });
       },
@@ -779,7 +828,12 @@ export default function Admissions() {
       </div>
       <div className="flex gap-2">
         {tab === "applications" && (
-          <Dialog open={open} onOpenChange={setOpen}>
+          <Dialog open={open} onOpenChange={(val) => {
+            setOpen(val);
+            if (!val) {
+              setAcademicYearError("");
+            }
+          }}>
             <DialogTrigger asChild>
               <Button className="gap-2 bg-violet-600/10 text-violet-400 border border-violet-500/20 hover:bg-violet-600/20">
                 <Plus className="w-4 h-4" />New Application
@@ -821,14 +875,40 @@ export default function Admissions() {
                     </Select>
                   </div>
                 </div>
-                <div>
-                  <Label>Applying for Class *</Label>
-                  <Select value={form.applyingForClass} onValueChange={(v) => setForm((f) => ({ ...f, applyingForClass: v }))}>
-                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select class" /></SelectTrigger>
-                    <SelectContent className="max-h-56">
-                      {CLASSES.map((c) => (<SelectItem key={c} value={c}>{classLabel(c)}</SelectItem>))}
-                    </SelectContent>
-                  </Select>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>Applying for Class *</Label>
+                    <Select value={form.applyingForClass} onValueChange={(v) => setForm((f) => ({ ...f, applyingForClass: v }))}>
+                      <SelectTrigger className="mt-1"><SelectValue placeholder="Select class" /></SelectTrigger>
+                      <SelectContent className="max-h-56">
+                        {CLASSES.map((c) => (<SelectItem key={c} value={c}>{classLabel(c)}</SelectItem>))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="student-academic-year">Academic Year *</Label>
+                    <Input
+                      id="student-academic-year"
+                      className="mt-1"
+                      value={form.academicYear}
+                      onChange={e => handleAcademicYearChange(e.target.value)}
+                      onBlur={() => {
+                        if (!form.academicYear) return;
+                        if (!isValidAcademicYearDisplay(form.academicYear)) {
+                          setAcademicYearError("Academic year must be exactly 4 digits.");
+                        }
+                      }}
+                      placeholder="2026"
+                      inputMode="numeric"
+                      maxLength={4}
+                      autoComplete="off"
+                    />
+                    {academicYearError ? (
+                      <p className="mt-1 text-xs text-red-500">{academicYearError}</p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground mt-1">Format: YYYY - YYYY+1.</p>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <Label>Previous School</Label>
@@ -981,7 +1061,7 @@ export default function Admissions() {
       );
     })()}
 </div>
-                <Button className="w-full" disabled={!form.applicantName || !form.dateOfBirth || !form.applyingForClass || !form.parentName || !form.parentEmail || !form.parentPhone || !!formDobError || !!formContactError || createMutation.isPending} onClick={() => {
+                <Button className="w-full" disabled={!form.applicantName || !form.dateOfBirth || !form.applyingForClass || !form.parentName || !form.parentEmail || !form.parentPhone || !!formDobError || !!formContactError || !!academicYearError || !isValidAcademicYearDisplay(form.academicYear) || createMutation.isPending} onClick={() => {
                   const dobError = dobValidationMessage(form.dateOfBirth, form.applyingForClass);
                   if (dobError) {
                     toast({ title: "Invalid date of birth", description: dobError, variant: "destructive" });
@@ -990,6 +1070,15 @@ export default function Admissions() {
                   const contactError = contactValidation(form);
                   if (contactError) {
                     toast({ title: "Invalid contact details", description: contactError, variant: "destructive" });
+                    return;
+                  }
+                  if (!isValidAcademicYearDisplay(form.academicYear)) {
+                    toast({ title: "Invalid academic year", description: "Enter a valid 4-digit year like 2026.", variant: "destructive" });
+                    return;
+                  }
+                  const academicYearStart = Number(form.academicYear.split(" - ")[0]);
+                  if (academicYearStart < getCurrentYear()) {
+                    toast({ title: "Invalid academic year", description: "Past academic years are not allowed. Please enter the current year or a future year.", variant: "destructive" });
                     return;
                   }
                   createMutation.mutate({
@@ -1003,6 +1092,7 @@ export default function Admissions() {
                     parentEmail: form.parentEmail,
                     parentPhone: form.parentPhone,
                     address: form.address || undefined,
+                    academicYear: form.academicYear,
                     ...(form.documents ? { documents: form.documents } : {}),
                   },
                 });

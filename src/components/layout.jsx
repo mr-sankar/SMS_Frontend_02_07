@@ -12,7 +12,9 @@ import {
   Search, X, Command, Landmark, Settings, Check, XCircle, Upload
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ToastAction } from "@/components/ui/toast";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -211,6 +213,66 @@ function NotificationBell() {
 }
 
 // ─── School Settings Component ──────────────────────────────────────────────
+function AnnouncementPushNotifier({ user, setLocation }) {
+  const { toast } = useToast();
+  const shownThisSessionRef = useRef(new Set());
+  const { data } = useQuery({
+    queryKey: ["notifications"],
+    queryFn: async () => {
+      const r = await fetch("/api/notifications", { credentials: "include" });
+      if (!r.ok)
+        throw new Error("Failed");
+      return r.json();
+    },
+    enabled: !!user,
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  });
+
+  useEffect(() => {
+    if (!user)
+      return;
+    const announcement = (data?.items ?? [])
+      .filter((item) => item.type === "announcements")
+      .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime())[0];
+
+    if (!announcement)
+      return;
+
+    const storageKey = `sms-announcement-toast:${user.id ?? user.email ?? user.role}`;
+    const notificationKey = `${announcement.id}:${announcement.createdAt ?? ""}:${announcement.body ?? ""}`;
+    if (shownThisSessionRef.current.has(notificationKey))
+      return;
+
+    let alreadySeen = false;
+    try {
+      alreadySeen = localStorage.getItem(storageKey) === notificationKey;
+      localStorage.setItem(storageKey, notificationKey);
+    } catch {
+      alreadySeen = false;
+    }
+
+    if (alreadySeen)
+      return;
+
+    shownThisSessionRef.current.add(notificationKey);
+    toast({
+      title: announcement.title || "New Announcement",
+      description: announcement.body || "Open announcements to view the latest update.",
+      action: (
+        <ToastAction
+          altText="Open announcements"
+          onClick={() => setLocation(announcement.href || "/announcements")}
+        >
+          Open
+        </ToastAction>
+      ),
+    });
+  }, [data, setLocation, toast, user]);
+
+  return null;
+}
+
 function SchoolSettings({ user, schoolName, setSchoolName, logoUrl, setLogoUrl, onUpdate }) {
   const [isEditing, setIsEditing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -574,7 +636,7 @@ export function Layout({ children }) {
   const [schoolName, setSchoolName] = useState("Nexus Academy");
   const [logoUrl, setLogoUrl] = useState("");
   const [settingsLoading, setSettingsLoading] = useState(true);
-  const [settingsVersion, setSettingsVersion] = useState(0);
+  const versionRef = useRef(0);
 
   const loadSettings = async () => {
     try {
@@ -589,14 +651,14 @@ export function Layout({ children }) {
 
 
 
-        setSettingsVersion(settings.version || Date.now());
+        versionRef.current = new Date(settings.updatedAt || 0).getTime();
 
         // Save to local storage for other local components
         const localSettings = {
           name: newName,
           logoUrl: newLogo,
           updatedAt: settings.updatedAt || new Date().toISOString(),
-          version: settings.version || Date.now()
+          version: versionRef.current
         };
         localStorage.setItem('schoolSettings', JSON.stringify(localSettings));
         console.log("✅ Loaded settings from API:", newName);
@@ -614,7 +676,7 @@ export function Layout({ children }) {
           const settings = JSON.parse(saved);
           setSchoolName(settings.name || "Nexus Academy");
           setLogoUrl(settings.logoUrl || "");
-          setSettingsVersion(settings.version || Date.now());
+          versionRef.current = settings.version || Date.now();
           console.log("✅ Loaded settings from localStorage (fallback):", settings.name);
         } else {
           const defaultSettings = {
@@ -626,7 +688,7 @@ export function Layout({ children }) {
           localStorage.setItem('schoolSettings', JSON.stringify(defaultSettings));
           setSchoolName(defaultSettings.name);
           setLogoUrl(defaultSettings.logoUrl);
-          setSettingsVersion(defaultSettings.version);
+          versionRef.current = defaultSettings.version;
           console.log("✅ Created default settings");
         }
       } catch (err) {
@@ -646,10 +708,10 @@ export function Layout({ children }) {
       if (e.key === 'schoolSettings' && e.newValue) {
         try {
           const settings = JSON.parse(e.newValue);
-          if (settings.version && settings.version > settingsVersion) {
+          if (settings.version && settings.version > versionRef.current) {
             setSchoolName(settings.name || "Nexus Academy");
             setLogoUrl(settings.logoUrl || "");
-            setSettingsVersion(settings.version);
+            versionRef.current = settings.version;
             console.log("🔄 Settings updated from another tab:", settings.name);
           }
         } catch (error) {
@@ -660,10 +722,10 @@ export function Layout({ children }) {
 
     const handleCustomEvent = (e) => {
       const settings = e.detail;
-      if (settings.version && settings.version > settingsVersion) {
+      if (settings.version && settings.version > versionRef.current) {
         setSchoolName(settings.name || "Nexus Academy");
         setLogoUrl(settings.logoUrl || "");
-        setSettingsVersion(settings.version);
+        versionRef.current = settings.version;
         console.log("🔄 Settings updated from custom event:", settings.name);
       }
     };
@@ -675,7 +737,7 @@ export function Layout({ children }) {
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('schoolSettingsUpdated', handleCustomEvent);
     };
-  }, [settingsVersion]);
+  }, []);
 
   useEffect(() => {
     if (user?.role)
@@ -787,6 +849,7 @@ export function Layout({ children }) {
 
   return (
     <div className="min-h-screen bg-background flex flex-col md:flex-row">
+      <AnnouncementPushNotifier user={user} setLocation={setLocation} />
       {/* Mobile Header */}
       <header className="md:hidden flex items-center justify-between gap-2 px-3 py-3 border-b border-border/40 bg-[#050505] sticky top-0 z-30 backdrop-blur-sm">
         <div className="flex min-w-0 flex-1 items-center gap-2">
