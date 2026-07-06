@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
+import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -143,7 +144,7 @@ function Router() {
 function App() {
   return (<QueryClientProvider client={queryClient}>
     <TooltipProvider>
-      <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+      <WouterRouter hook={useHashLocation}>
         <AuthProvider>
           <Router />
         </AuthProvider>
